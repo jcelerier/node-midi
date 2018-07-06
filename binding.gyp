@@ -4,7 +4,9 @@
       'target_name': 'midi',
       'include_dirs': [
         "<!(node -e \"require('nan')\")",
-        'src'
+        'src',
+        'src/lib/RtMidi17',
+        'src/lib/weakjack'
       ],
       'sources': [
         'src/node-midi.cpp'
@@ -15,21 +17,27 @@
             'cflags_cc!': [
               '-fno-exceptions'
             ],
+            'cflags_cc': [ '-std=c++1z' ],
             'defines': [
-              '__LINUX_ALSA__'
+              'RTMIDI17_ALSA',
+              'RTMIDI17_JACK',
+              'RTMIDI17_HEADER_ONLY'
             ],
             'link_settings': {
               'libraries': [
                 '-lasound',
-                '-lpthread',
+                '-pthread',
               ]
             }
           }
         ],
         ['OS=="mac"',
           {
+            'cflags_cc': [ '-std=c++1z' ],
             'defines': [
-              '__MACOSX_CORE__'
+              '__MACOSX_CORE__',
+              'RTMIDI17_JACK',
+              'RTMIDI17_HEADER_ONLY'
             ],
             'xcode_settings': {
               'GCC_ENABLE_CPP_EXCEPTIONS': 'YES'
@@ -54,8 +62,11 @@
                 }
               }
             },
+            'cflags_cc': [ '/std:c++latest' ],
             'defines': [
-              '__WINDOWS_MM__'
+              'RTMIDI17_WINMM',
+              'RTMIDI17_JACK',
+              'RTMIDI17_HEADER_ONLY'
             ],
             'link_settings': {
               'libraries': [

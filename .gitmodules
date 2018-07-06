@@ -1,0 +1,6 @@
+[submodule "src/lib/RtMidi17"]
+	path = src/lib/RtMidi17
+	url = https://github.com/jcelerier/RtMidi17
+[submodule "src/lib/weakjack"]
+	path = src/lib/weakjack
+	url = https://github.com/jcelerier/weakjack

@@ -2,13 +2,12 @@
 #include <queue>
 #include <uv.h>
 
-#include "lib/RtMidi/RtMidi.h"
-#include "lib/RtMidi/RtMidi.cpp"
+#include "lib/RtMidi17/rtmidi17/rtmidi17.hpp"
 
 class NodeMidiOutput : public Nan::ObjectWrap
 {
 private:
-    RtMidiOut* out;
+    rtmidi::midi_out out;
 public:
     static Nan::Persistent<v8::FunctionTemplate> s_ct;
     static void Init(v8::Handle<v8::Object> target)
@@ -35,12 +34,10 @@ public:
 
     NodeMidiOutput()
     {
-        out = new RtMidiOut();
     }
 
     ~NodeMidiOutput()
     {
-        delete out;
     }
 
     static NAN_METHOD(New)
@@ -61,7 +58,7 @@ public:
     {
         Nan::HandleScope scope;
         NodeMidiOutput* output = Nan::ObjectWrap::Unwrap<NodeMidiOutput>(info.This());
-        v8::Local<v8::Integer> result = Nan::New<v8::Uint32>(output->out->getPortCount());
+        v8::Local<v8::Integer> result = Nan::New<v8::Uint32>(output->out.get_port_count());
         info.GetReturnValue().Set(result);
     }
 
@@ -74,7 +71,7 @@ public:
         }
 
         unsigned int portNumber = info[0]->Uint32Value();
-        v8::Local<v8::String> result = Nan::New<v8::String>(output->out->getPortName(portNumber).c_str()).ToLocalChecked();
+        v8::Local<v8::String> result = Nan::New<v8::String>(output->out.get_port_name(portNumber).c_str()).ToLocalChecked();
         info.GetReturnValue().Set(result);
     }
 
@@ -86,11 +83,11 @@ public:
             return Nan::ThrowTypeError("First argument must be an integer");
         }
         unsigned int portNumber = info[0]->Uint32Value();
-        if (portNumber >= output->out->getPortCount()) {
+        if (portNumber >= output->out.get_port_count()) {
             return Nan::ThrowRangeError("Invalid MIDI port number");
         }
 
-        output->out->openPort(portNumber);
+        output->out.open_port(portNumber);
         return;
     }
 
@@ -104,7 +101,7 @@ public:
 
         std::string name(*v8::String::Utf8Value(info[0].As<v8::String>()));
 
-        output->out->openVirtualPort(name);
+        output->out.open_virtual_port(name);
         return;
     }
 
@@ -112,7 +109,7 @@ public:
     {
         Nan::HandleScope scope;
         NodeMidiOutput* output = Nan::ObjectWrap::Unwrap<NodeMidiOutput>(info.This());
-        output->out->closePort();
+        output->out.close_port();
         return;
     }
 
@@ -126,11 +123,22 @@ public:
 
         v8::Local<v8::Object> message = info[0]->ToObject();
         int32_t messageLength = message->Get(Nan::New<v8::String>("length").ToLocalChecked())->Int32Value();
-        std::vector<unsigned char> messageOutput;
-        for (int32_t i = 0; i != messageLength; ++i) {
-            messageOutput.push_back(message->Get(Nan::New<v8::Integer>(i))->Int32Value());
+
+        if(messageLength < 8192)
+        {
+            unsigned char* messageOutput = (unsigned char*)alloca(messageLength);
+            for (int32_t i = 0; i != messageLength; ++i)
+              messageOutput[i] = message->Get(Nan::New<v8::Integer>(i))->Int32Value();
+            output->out.send_message(messageOutput, messageLength);
         }
-        output->out->sendMessage(&messageOutput);
+        else
+        {
+            std::vector<unsigned char> messageOutput(messageLength);
+            for (int32_t i = 0; i != messageLength; ++i) {
+                messageOutput[i] = message->Get(Nan::New<v8::Integer>(i))->Int32Value();
+            }
+            output->out.send_message(messageOutput);
+        }
         return;
     }
 };
@@ -141,7 +149,7 @@ const char* symbol_message = "message";
 class NodeMidiInput : public Nan::ObjectWrap
 {
 private:
-    RtMidiIn* in;
+    rtmidi::midi_in in;
 
 public:
     uv_async_t message_async;
@@ -179,14 +187,12 @@ public:
 
     NodeMidiInput()
     {
-        in = new RtMidiIn();
         uv_mutex_init(&message_mutex);
     }
 
     ~NodeMidiInput()
     {
-        in->closePort();
-        delete in;
+        in.close_port();
         uv_mutex_destroy(&message_mutex);
     }
 
@@ -215,16 +221,16 @@ public:
         uv_mutex_unlock(&input->message_mutex);
     }
 
-    static void Callback(double deltaTime, std::vector<unsigned char> *message, void *userData)
+    static void Callback(const rtmidi::message& msg, NodeMidiInput& input)
     {
-        NodeMidiInput *input = static_cast<NodeMidiInput*>(userData);
-        MidiMessage* data = new MidiMessage();
-        data->deltaTime = deltaTime;
-        data->message = *message;
-        uv_mutex_lock(&input->message_mutex);
-        input->message_queue.push(data);
-        uv_mutex_unlock(&input->message_mutex);
-        uv_async_send(&input->message_async);
+        auto data = new MidiMessage;
+        data->deltaTime = msg.timestamp;
+        data->message.assign(msg.bytes.begin(), msg.bytes.end());
+
+        uv_mutex_lock(&input.message_mutex);
+        input.message_queue.push(data);
+        uv_mutex_unlock(&input.message_mutex);
+        uv_async_send(&input.message_async);
     }
 
     static NAN_METHOD(New)
@@ -247,7 +253,7 @@ public:
     {
         Nan::HandleScope scope;
         NodeMidiInput* input = Nan::ObjectWrap::Unwrap<NodeMidiInput>(info.This());
-        v8::Local<v8::Integer> result = Nan::New<v8::Uint32>(input->in->getPortCount());
+        v8::Local<v8::Integer> result = Nan::New<v8::Uint32>(input->in.get_port_count());
         info.GetReturnValue().Set(result);
     }
 
@@ -260,7 +266,7 @@ public:
         }
 
         unsigned int portNumber = info[0]->Uint32Value();
-        v8::Local<v8::String> result = Nan::New<v8::String>(input->in->getPortName(portNumber).c_str()).ToLocalChecked();
+        v8::Local<v8::String> result = Nan::New<v8::String>(input->in.get_port_name(portNumber).c_str()).ToLocalChecked();
         info.GetReturnValue().Set(result);
     }
 
@@ -272,13 +278,13 @@ public:
             return Nan::ThrowTypeError("First argument must be an integer");
         }
         unsigned int portNumber = info[0]->Uint32Value();
-        if (portNumber >= input->in->getPortCount()) {
+        if (portNumber >= input->in.get_port_count()) {
             return Nan::ThrowRangeError("Invalid MIDI port number");
         }
 
         input->Ref();
-        input->in->setCallback(&NodeMidiInput::Callback, Nan::ObjectWrap::Unwrap<NodeMidiInput>(info.This()));
-        input->in->openPort(portNumber);
+        input->in.set_callback([=] (auto& msg) { Callback(msg, *input); });
+        input->in.open_port(portNumber);
         return;
     }
 
@@ -293,8 +299,8 @@ public:
         std::string name(*v8::String::Utf8Value(info[0].As<v8::String>()));
 
         input->Ref();
-        input->in->setCallback(&NodeMidiInput::Callback, Nan::ObjectWrap::Unwrap<NodeMidiInput>(info.This()));
-        input->in->openVirtualPort(name);
+        input->in.set_callback([=] (auto& msg) { Callback(msg, *input); });
+        input->in.open_virtual_port(name);
         return;
     }
 
@@ -302,11 +308,11 @@ public:
     {
         Nan::HandleScope scope;
         NodeMidiInput* input = Nan::ObjectWrap::Unwrap<NodeMidiInput>(info.This());
-        if (input->in->isPortOpen()) {
+        if (input->in.is_port_open()) {
             input->Unref();
         }
-        input->in->cancelCallback();
-        input->in->closePort();
+        input->in.cancel_callback();
+        input->in.close_port();
         uv_close((uv_handle_t*)&input->message_async, NULL);
         return;
     }
@@ -322,7 +328,7 @@ public:
         bool filter_sysex = info[0]->BooleanValue();
         bool filter_timing = info[1]->BooleanValue();
         bool filter_sensing = info[2]->BooleanValue();
-        input->in->ignoreTypes(filter_sysex, filter_timing, filter_sensing);
+        input->in.ignore_types(filter_sysex, filter_timing, filter_sensing);
         return;
     }
 };
